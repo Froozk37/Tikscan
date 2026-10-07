@@ -787,7 +787,11 @@ function parseReceipt(raw){
   const cp = raw.match(/\b(\d{5})\s+([A-ZÀ-Ü][A-ZÀ-Üa-zà-ü' \-]{2,30})/);
   if (cp) { info.city = cp[2].trim().split(/\s{2,}| cedex/i)[0].toLowerCase().replace(/(^|[\s\-'])\S/g, s => s.toUpperCase()); }
   // Catégorie
-  if (/\b(avoir|retour|rembours)/i.test(flat)) info.category = 'Retour';
+  // Retour : seulement un vrai avoir / remboursement (pas le rendu monnaie ni les conditions d'échange)
+  const strict = lines.map(l => l.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''))
+    .filter(l => !/rendu|monnaie|sous \d+ ?j|jours|echange|condition|conserve|politique|satisfait|www|\.fr/.test(l)).join('\n');
+  const negNet = lines.some(l => isNet(l) && /-\s?\d/.test(l));
+  if (negNet || /\b(bon d.?avoir|avoir n|ticket (de )?retour|retour (article|produit|marchandise)|rembourse(ment)? client|a rendre au client|annulation vente)\b/.test(strict)) info.category = 'Retour';
   else if (/garantie/i.test(flat)) info.category = 'Garantie';
   else if (/colis|chronopost|colissimo|mondial relay|la poste|ups|dhl/i.test(flat)) info.category = 'Colis';
   else if (/carte cadeau|e-carte|gift/i.test(flat)) info.category = 'Carte cadeau';
@@ -1017,7 +1021,7 @@ function toast(msg, btn, fn){
 /* ---------------- Init ---------------- */
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) stopCam(); });
 // Recalcule le net à payer des tickets déjà lus avec la nouvelle règle
-items.forEach(it => { if (it.ocr && (!it.amount || (it.auto||[]).includes('amount'))) { const a = parseReceipt(it.ocr).amount; if (a) { it.amount = a; it.auto = [...new Set([...(it.auto||[]), 'amount'])]; } } });
+items.forEach(it => { if (it.ocr) { const P = parseReceipt(it.ocr); if ((it.auto||[]).includes('category')) { it.category = P.category || opt.cat; } const a = P.amount; if (a && (!it.amount || (it.auto||[]).includes('amount'))) { it.amount = a; it.auto = [...new Set([...(it.auto||[]), 'amount'])]; } } });
 applyTheme(); bindSettings(); setModeUI(); save();
 if (items[0]) renderLast(items[0]);
 refreshAll();
