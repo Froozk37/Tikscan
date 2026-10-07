@@ -153,6 +153,13 @@ nav .fab.on{color:var(--txt)}
 .star{border:0;background:none;font-size:24px;line-height:1}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
 .photo{width:100%;border-radius:12px;margin-top:10px;max-height:300px;object-fit:contain;background:var(--card2)}
+.ocrBox{display:flex;align-items:center;gap:10px;background:color-mix(in srgb,var(--acc) 14%,var(--card));border:1px solid color-mix(in srgb,var(--acc) 45%,transparent);border-radius:12px;padding:10px 12px;margin-top:10px;font-size:14px}
+.ocrBox .bar{flex:1;height:6px;background:var(--card2);border-radius:9px;overflow:hidden}
+.ocrBox .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+.spin{width:16px;height:16px;border:2px solid var(--acc);border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.f.auto{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--bg2))}
+.autoTag{color:var(--acc);font-size:11px;font-weight:700;margin-left:4px}
 /* Toast */
 .toast{position:fixed;left:16px;right:16px;bottom:calc(96px + env(safe-area-inset-bottom));z-index:50;max-width:520px;margin:0 auto;background:var(--txt);color:var(--bg);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:10px;font-weight:500;transform:translateY(20px);opacity:0;pointer-events:none;transition:.25s}
 .toast.on{transform:none;opacity:1;pointer-events:auto}
@@ -259,6 +266,7 @@ nav .fab.on{color:var(--txt)}
     <div class="set"><div>Vibration</div><label class="sw"><input type="checkbox" id="optVib"><span></span></label></div>
     <div class="set"><div>Autoriser les doublons<small>Sinon un ticket déjà scanné est ignoré</small></div><label class="sw"><input type="checkbox" id="optDup"><span></span></label></div>
     <div class="set"><div>Garder une photo<small>Miniature du ticket enregistrée</small></div><label class="sw"><input type="checkbox" id="optPhoto"><span></span></label></div>
+    <div class="set"><div>✨ Remplissage auto<small>Lit le ticket (prix, magasin, date…) après le scan</small></div><label class="sw"><input type="checkbox" id="optOcr"><span></span></label></div>
     <div class="set"><div>Catégorie par défaut</div><select class="mini" id="optCat"></select></div>
   </div>
   <div class="card">
@@ -272,7 +280,7 @@ nav .fab.on{color:var(--txt)}
     <button class="btn d mt" id="wipeBtn" style="width:100%">🗑️ Tout supprimer</button>
     <p class="sub mt" id="storage"></p>
   </div>
-  <p class="sub" style="text-align:center;margin:10px 0 20px">TikScan v2 · données stockées uniquement sur cet appareil</p>
+  <p class="sub" style="text-align:center;margin:10px 0 20px">TikScan v3 · données stockées uniquement sur cet appareil</p>
 </section>
 </main>
 
@@ -295,6 +303,8 @@ nav .fab.on{color:var(--txt)}
     <button class="btn" id="shShare">📤 Partager</button>
     <button class="btn" id="shFull">⛶ Agrandir</button>
   </div>
+  <div class="ocrBox hide" id="ocrBox"><div class="spin"></div><span id="ocrTxt">Lecture du ticket…</span><div class="bar"><i id="ocrBar"></i></div></div>
+  <label class="btn mt" style="width:100%"><input type="file" id="ocrFile" accept="image/*" hidden>✨ Remplir depuis une photo du ticket</label>
   <label class="l">Nom / description</label><input class="f" id="fLabel" placeholder="Ex : Pneus Michelin, retour colis…">
   <div class="grid2">
     <div><label class="l">Magasin</label><input class="f" id="fStore" list="storesDL" placeholder="Ex : Feu Vert Nîmes"></div>
@@ -333,7 +343,7 @@ let items = LS.get('tikscan_items', null);
 if (!items) { // migration v1
   items = LS.get('tickets', []).map(i => ({ id: uid(), text:i.text, format:i.format, source:i.source, date:i.date, label:'', store:'', amount:'', category:'Caisse', notes:'', fav:false, thumb:'', tdate:'' }));
 }
-let opt = Object.assign({ mode:'burst', sound:true, vib:true, dup:false, photo:true, cat:'Caisse', theme:'auto' }, LS.get('tikscan_opt', {}));
+let opt = Object.assign({ mode:'burst', sound:true, vib:true, dup:false, photo:true, ocr:true, cat:'Caisse', theme:'auto' }, LS.get('tikscan_opt', {}));
 const save = () => { LS.set('tikscan_items', items); };
 const saveOpt = () => LS.set('tikscan_opt', opt);
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -421,13 +431,15 @@ function makeThumb(src, w, h){
 }
 
 /* ---------------- Ajout d'un ticket ---------------- */
-function addItem(text, format, source, thumb=''){
+function addItem(text, format, source, thumb='', ocrSrc=null){
   text = String(text).trim();
   if (!text) return null;
   const ex = items.find(i => i.text === text);
   if (ex && !opt.dup) { toast(`Déjà enregistré : ${text}`, 'Voir', () => openSheet(ex.id)); feedback(false); return null; }
-  const it = { id:uid(), text, format:format||'MANUEL', source, date:new Date().toISOString(), label:'', store:'', amount:'', category:opt.cat, notes:'', fav:false, thumb, tdate:new Date().toISOString().slice(0,10) };
+  const it = { id:uid(), text, format:format||'MANUEL', source, date:new Date().toISOString(), label:'', store:'', amount:'', category:opt.cat, notes:'', fav:false, thumb, tdate:new Date().toISOString().slice(0,10), auto:['tdate'] };
   items.unshift(it); save(); feedback(true);
+  if (ocrSrc) queueOCR(it.id, ocrSrc);
+  lookupProduct(it);
   renderLast(it); refreshAll();
   if (opt.mode === 'single' || source === 'saisie') openSheet(it.id);
   else toast(`✅ ${text}`, 'Modifier', () => openSheet(it.id));
@@ -521,7 +533,7 @@ async function tick(){
     if (res.text !== last || now - lastT > 3000) {
       last = res.text; lastT = now;
       const th = makeThumb(video, vw, vh);
-      addItem(res.text, res.format, 'scan', th);
+      addItem(res.text, res.format, 'scan', th, opt.ocr ? snap(video, vw, vh) : null);
     }
   }
 }
@@ -543,7 +555,7 @@ async function handleFiles(files){
     const res = await decodeImage(img);
     if (!res.length) { d.querySelector('span').textContent = '❌ Aucun code'; continue; }
     const th = makeThumb(img, img.naturalWidth, img.naturalHeight);
-    res.forEach(r => { if (addItem(r.text, r.format, 'image', th)) found++; });
+    res.forEach((r,k) => { if (addItem(r.text, r.format, 'image', th, opt.ocr && k===0 ? snap(img, img.naturalWidth, img.naturalHeight) : null)) found++; });
     d.querySelector('span').textContent = '✅ ' + res[0].text;
   }
   if (files.length > 1) toast(`${found} ticket(s) ajouté(s) sur ${files.length} image(s)`);
@@ -603,7 +615,7 @@ function renderList(hl){
     html += `<button class="it ${i.id===hl?'flash':''}" data-id="${i.id}">
       ${selMode ? `<span style="font-size:20px">${sel.has(i.id)?'☑️':'⬜'}</span>` : ''}
       <div class="th">${i.thumb ? `<img src="${i.thumb}" alt="">` : (CAT_IC[i.category]||'🧾')}</div>
-      <div class="g"><div class="t1">${i.fav?'★ ':''}${esc(i.label || i.store || i.category)}</div>
+      <div class="g"><div class="t1">${i.fav?'★ ':''}${esc(i.label || i.store || i.category)}${(i.auto||[]).length?'<span class="autoTag">✨</span>':''}</div>
         <div class="t2">${esc(i.text)}</div>
         <div class="t3"><span class="tag">${FMT_NAME(i.format)}</span>${i.store&&i.label?`<span>${esc(i.store)}</span>`:''}${v===false?'<span class="tag bad">clé ✗</span>':''}<span>${new Date(i.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span></div></div>
       ${i.amount ? `<div class="amt">${eur(i.amount)}</div>` : ''}
@@ -628,6 +640,144 @@ $('#selDel').onclick = () => {
   toast(`${removed.length} ticket(s) supprimé(s)`, 'Annuler', () => { items = [...removed, ...items].sort((a,b) => b.date.localeCompare(a.date)); save(); refreshAll(); });
 };
 $('#selShare').onclick = () => shareText(items.filter(i => sel.has(i.id)));
+
+/* ---------------- Remplissage auto (OCR) ---------------- */
+function snap(src, w, h){
+  const c = document.createElement('canvas'), s = Math.min(1, 1800 / Math.max(w,h));
+  c.width = Math.round(w*s); c.height = Math.round(h*s);
+  const g = c.getContext('2d'); g.filter = 'grayscale(1) contrast(1.5)'; g.drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
+let tessP = null, worker = null;
+function loadTess(){
+  if (tessP) return tessP;
+  tessP = new Promise((ok, ko) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+    s.onload = async () => {
+      try { worker = await Tesseract.createWorker('fra', 1, { logger: m => { if (m.status === 'recognizing text') ocrProgress(m.progress); } }); ok(worker); }
+      catch(e){ tessP = null; ko(e); }
+    };
+    s.onerror = () => { tessP = null; ko(new Error('net')); };
+    document.head.appendChild(s);
+  });
+  return tessP;
+}
+const ocrQ = []; let ocrBusy = false, ocrCur = null;
+function queueOCR(id, canvas){ ocrQ.push({ id, canvas }); runOCR(); }
+function ocrUI(){
+  const on = cur && ocrCur === cur.id;
+  $('#ocrBox').classList.toggle('hide', !on);
+}
+function ocrProgress(p){ if (cur && ocrCur === cur.id) { $('#ocrBar').style.width = Math.round(p*100) + '%'; $('#ocrTxt').textContent = `Lecture du ticket… ${Math.round(p*100)}%`; } }
+async function runOCR(){
+  if (ocrBusy || !ocrQ.length) return;
+  ocrBusy = true;
+  const job = ocrQ.shift(); ocrCur = job.id; ocrUI(); ocrProgress(0);
+  try {
+    const w = await loadTess();
+    const { data } = await w.recognize(job.canvas);
+    const info = parseReceipt(data.text || '');
+    const it = items.find(i => i.id === job.id);
+    if (it) {
+      const filled = applyInfo(it, info);
+      save(); refreshAll(it.id);
+      if (items[0]?.id === it.id) renderLast(it);
+      if (cur && cur.id === it.id) openSheet(it.id);
+      toast(filled.length ? `✨ Rempli : ${filled.join(', ')}` : 'Ticket lu, mais rien trouvé à remplir', filled.length ? 'Voir' : '', () => openSheet(it.id));
+    }
+  } catch(e) { toast('Lecture du ticket impossible (connexion ?)'); }
+  ocrCur = null; ocrBusy = false; ocrUI(); runOCR();
+}
+const BRANDS = ['Feu Vert','Norauto','Speedy','Midas','Point S','Euromaster','Carrefour Market','Carrefour Contact','Carrefour City','Carrefour','E.Leclerc','Leclerc','Auchan','Intermarché','Intermarche','Lidl','Aldi','Casino','Géant Casino','Monoprix','Franprix','Super U','Hyper U','U Express','Netto','Leader Price','Grand Frais','Picard','Biocoop','Action','Gifi','Noz','Decathlon','Intersport','Go Sport','Fnac','Darty','Boulanger','Leroy Merlin','Castorama','Brico Dépôt','Bricomarché','Mr Bricolage','Ikea','But','Conforama','Maisons du Monde','Kiabi','Primark','Zara','H&M','Jules','Celio','Sephora','Nocibé','Marionnaud','Pharmacie','McDonald','Burger King','KFC','Quick','Subway','Starbucks','Paul','Boulangerie','Total','TotalEnergies','Esso','Shell','BP','Avia','La Poste','Relay','Tabac','Cultura','Micromania','Jardiland','Truffaut','Botanic','Lapeyre','Orchestra','JouéClub','King Jouet','Optic 2000','Afflelou','Krys'];
+function parseReceipt(raw){
+  const lines = raw.split('\n').map(l => l.replace(/\s+/g,' ').trim()).filter(l => l.length > 1);
+  const low = raw.toLowerCase(), info = {};
+  const amt = s => { const m = [...s.matchAll(/(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g)].map(x => parseFloat(x[1] + '.' + x[2])); return m; };
+  // Montant total
+  const keys = [[/net\s*[aà]\s*payer/i,10],[/total\s*ttc/i,9],[/montant\s*ttc/i,9],[/[aà]\s*payer/i,8],[/total\s*(eur|€)/i,8],[/^\s*total(?!.*(ht|tva|remise|articles?|qt))/i,7],[/montant/i,5],[/\b(cb|carte|visa|mastercard|esp[eè]ces|ch[eè]que)\b/i,4],[/total/i,3]];
+  let best = null;
+  lines.forEach((l, k) => {
+    if (/\b(tva|h\.?t\.?|rendu|remise|[ée]conomie|fid[ée]lit[ée]|cagnotte)\b/i.test(l) && !/ttc/i.test(l)) return;
+    for (const [re, sc] of keys) if (re.test(l)) {
+      let a = amt(l); if (!a.length && lines[k+1]) a = amt(lines[k+1]);
+      if (a.length) { const v = a[a.length-1]; if (v > 0 && v < 100000 && (!best || sc > best.sc || (sc === best.sc && v > best.v))) best = { v, sc }; }
+      break;
+    }
+  });
+  if (!best) { const all = lines.flatMap(amt).filter(v => v > 0 && v < 20000); if (all.length) best = { v: Math.max(...all) }; }
+  if (best) info.amount = +best.v.toFixed(2);
+  // Date
+  const dm = raw.match(/\b(\d{1,2})\s?[\/.\-]\s?(\d{1,2})\s?[\/.\-]\s?(20\d{2}|\d{2})\b/);
+  if (dm) {
+    let [_, d, m, y] = dm; y = y.length === 2 ? '20' + y : y;
+    const D = +d, M = +m;
+    if (D >= 1 && D <= 31 && M >= 1 && M <= 12 && +y <= new Date().getFullYear() + 1) info.tdate = `${y}-${String(M).padStart(2,'0')}-${String(D).padStart(2,'0')}`;
+  }
+  // Heure
+  const hm = raw.match(/\b([01]?\d|2[0-3])\s?[:h]\s?([0-5]\d)\b/);
+  // Magasin
+  const flat = low.normalize('NFD').replace(/[̀-ͯ]/g,'');
+  for (const b of BRANDS) { const k = b.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); if (flat.includes(k)) { info.store = b.replace('Intermarche','Intermarché').replace('E.Leclerc','Leclerc'); break; } }
+  if (!info.store) {
+    const cand = lines.slice(0, 6).find(l => /[a-z]{3}/i.test(l) && !/\d{4,}|ticket|facture|tel|t[ée]l|siret|www|@|bienvenue|merci/i.test(l) && l.replace(/[^A-ZÀ-Ü]/g,'').length >= l.replace(/[^A-Za-zÀ-ü]/g,'').length * .6);
+    if (cand) info.store = cand.replace(/[^\wÀ-ü' &.-]/g,'').trim().replace(/\b\w+/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()).slice(0, 40);
+  }
+  const cp = raw.match(/\b(\d{5})\s+([A-ZÀ-Ü][A-ZÀ-Üa-zà-ü' \-]{2,30})/);
+  if (cp) { info.city = cp[2].trim().split(/\s{2,}| cedex/i)[0].toLowerCase().replace(/(^|[\s\-'])\S/g, s => s.toUpperCase()); }
+  // Catégorie
+  if (/\b(avoir|retour|rembours)/i.test(flat)) info.category = 'Retour';
+  else if (/garantie/i.test(flat)) info.category = 'Garantie';
+  else if (/colis|chronopost|colissimo|mondial relay|la poste|ups|dhl/i.test(flat)) info.category = 'Colis';
+  else if (/carte cadeau|e-carte|gift/i.test(flat)) info.category = 'Carte cadeau';
+  else if (/fdj|loto|euromillions|grattage/i.test(flat)) info.category = 'Jeu / Loto';
+  // Notes : paiement, n° ticket, heure, nb articles
+  const notes = [];
+  const pay = /\b(cb|carte bancaire|visa|mastercard|sans contact)\b/i.test(raw) ? 'CB' : /esp[eè]ces/i.test(raw) ? 'Espèces' : /ch[eè]que/i.test(raw) ? 'Chèque' : '';
+  if (pay) notes.push('Paiement : ' + pay);
+  const tn = raw.match(/(?:ticket|tkt|transaction|facture)\s*(?:n[°o.]*|#|:)\s*([A-Z0-9\-\/]{3,})/i);
+  if (tn) notes.push('N° : ' + tn[1]);
+  if (hm) notes.push('Heure : ' + hm[1].padStart(2,'0') + 'h' + hm[2]);
+  const na = raw.match(/(\d{1,3})\s*articles?/i);
+  if (na) notes.push(na[1] + ' article(s)');
+  if (notes.length) info.notes = notes.join(' · ');
+  info.raw = raw.slice(0, 3000);
+  return info;
+}
+function applyInfo(it, info){
+  const f = [], auto = new Set(it.auto || []);
+  const set = (k, v, name) => { if (v !== undefined && v !== '' && (!it[k] || auto.has(k))) { it[k] = v; auto.add(k); f.push(name); } };
+  set('amount', info.amount, 'prix');
+  const store = info.store ? (info.city && !info.store.toLowerCase().includes(info.city.toLowerCase()) ? `${info.store} ${info.city}` : info.store) : (info.city || '');
+  set('store', store, 'magasin');
+  set('tdate', info.tdate, 'date');
+  if (info.category && (it.category === opt.cat || auto.has('category'))) { it.category = info.category; auto.add('category'); f.push('catégorie'); }
+  set('notes', info.notes, 'infos');
+  if (!it.label && info.store) { it.label = `Ticket ${info.store}`; auto.add('label'); }
+  it.ocr = info.raw; it.auto = [...auto];
+  return f;
+}
+/* Nom du produit si le code est un EAN de produit (Open Food Facts) */
+async function lookupProduct(it){
+  if (!/^(EAN_13|EAN_8|UPC_A|UPC_E)$/.test(it.format) || checksumOk(it.text) !== true || /^2/.test(it.text)) return;
+  try {
+    const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${it.text}.json?fields=product_name_fr,product_name,brands`);
+    const d = await r.json(); const p = d.product;
+    if (d.status === 1 && p && (p.product_name_fr || p.product_name) && !it.label) {
+      it.label = [p.product_name_fr || p.product_name, p.brands?.split(',')[0]].filter(Boolean).join(' – ');
+      it.auto = [...new Set([...(it.auto||[]), 'label'])]; save(); refreshAll(it.id);
+      if (items[0]?.id === it.id) renderLast(it); if (cur && cur.id === it.id) openSheet(it.id);
+    }
+  } catch(e){}
+}
+$('#ocrFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f || !cur) return;
+  const img = new Image(); img.src = URL.createObjectURL(f); await img.decode().catch(()=>{});
+  if (opt.photo && !cur.thumb) { cur.thumb = makeThumb(img, img.naturalWidth, img.naturalHeight); save(); $('#fPhoto').src = cur.thumb; $('#fPhoto').classList.remove('hide'); }
+  // garde ce que l'utilisateur a déjà tapé
+  collectForm(cur); save();
+  queueOCR(cur.id, snap(img, img.naturalWidth, img.naturalHeight)); ocrUI();
+};
 
 /* ---------------- Fiche ticket ---------------- */
 let cur = null, sheetOpen = false;
@@ -654,21 +804,29 @@ function openSheet(id){
   $('#fLabel').value = cur.label; $('#fStore').value = cur.store; $('#fAmt').value = cur.amount ? (+cur.amount).toFixed(2).replace('.',',') : '';
   $('#fCat').value = cur.category; $('#fDate').value = cur.tdate || cur.date.slice(0,10); $('#fText').value = cur.text; $('#fNotes').value = cur.notes;
   $('#fPhoto').classList.toggle('hide', !cur.thumb); if (cur.thumb) $('#fPhoto').src = cur.thumb;
+  const A = new Set(cur.auto || []);
+  [['label','#fLabel'],['store','#fStore'],['amount','#fAmt'],['category','#fCat'],['tdate','#fDate'],['notes','#fNotes']].forEach(([k,s]) => $(s).classList.toggle('auto', A.has(k)));
+  setTimeout(ocrUI);
   const v = checksumOk(cur.text);
-  $('#shMeta').innerHTML = `${FMT_NAME(cur.format)} · ${cur.source} · ajouté le ${new Date(cur.date).toLocaleString('fr-FR')} ${v===true?'· <span class="tag ok">clé de contrôle valide</span>':v===false?'· <span class="tag bad">clé de contrôle invalide</span>':''}`;
+  $('#shMeta').innerHTML = `${FMT_NAME(cur.format)} · ${cur.source} · ajouté le ${new Date(cur.date).toLocaleString('fr-FR')} ${(cur.auto||[]).length?'· <span class="autoTag">✨ champs en jaune remplis automatiquement</span> ':''}${v===true?'· <span class="tag ok">clé de contrôle valide</span>':v===false?'· <span class="tag bad">clé de contrôle invalide</span>':''}`;
   $('#storesDL').innerHTML = [...new Set(items.map(i => i.store).filter(Boolean))].map(s => `<option value="${esc(s)}">`).join('');
   $('#ov').classList.add('on'); $('#sheet').classList.add('on'); $('#sheet').scrollTop = 0; sheetOpen = true;
 }
-function closeSheet(){ $('#ov').classList.remove('on'); $('#sheet').classList.remove('on'); sheetOpen = false; cur = null; }
+function closeSheet(){ $('#ocrBox').classList.add('hide'); $('#ov').classList.remove('on'); $('#sheet').classList.remove('on'); sheetOpen = false; cur = null; }
 $('#ov').onclick = closeSheet;
 $('#shFav').onclick = () => { if (!cur) return; cur.fav = !cur.fav; save(); $('#shFav').textContent = cur.fav ? '★' : '☆'; $('#shFav').style.color = cur.fav ? 'var(--acc)' : ''; refreshAll(); };
+function collectForm(it){
+  const before = { label:it.label, store:it.store, amount:it.amount, category:it.category, tdate:it.tdate, notes:it.notes };
+  const t = $('#fText').value.trim(); if (t) it.text = t;
+  it.label = $('#fLabel').value.trim(); it.store = $('#fStore').value.trim();
+  const a = $('#fAmt').value.replace(',','.').replace(/[^\d.]/g,''); it.amount = a ? +(+a).toFixed(2) : '';
+  it.category = $('#fCat').value; it.tdate = $('#fDate').value; it.notes = $('#fNotes').value.trim();
+  // un champ modifié à la main n'est plus "auto"
+  it.auto = (it.auto || []).filter(k => String(before[k] ?? '') === String(it[k] ?? ''));
+}
 $('#shSave').onclick = () => {
   if (!cur) return;
-  const t = $('#fText').value.trim();
-  if (t && t !== cur.text) { cur.text = t; }
-  cur.label = $('#fLabel').value.trim(); cur.store = $('#fStore').value.trim();
-  const a = $('#fAmt').value.replace(',','.').replace(/[^\d.]/g,''); cur.amount = a ? +(+a).toFixed(2) : '';
-  cur.category = $('#fCat').value; cur.tdate = $('#fDate').value; cur.notes = $('#fNotes').value.trim();
+  collectForm(cur);
   save(); const id = cur.id; closeSheet(); refreshAll(id); if (items[0]?.id === id) renderLast(items[0]); toast('Ticket enregistré ✓');
 };
 $('#shDel').onclick = () => {
@@ -753,7 +911,7 @@ function renderStats(){
 /* ---------------- Réglages ---------------- */
 function bindSettings(){
   const b = (id, k) => { const el = $(id); el.checked = opt[k]; el.onchange = () => { opt[k] = el.checked; saveOpt(); }; };
-  b('#optSound','sound'); b('#optVib','vib'); b('#optDup','dup'); b('#optPhoto','photo');
+  b('#optSound','sound'); b('#optVib','vib'); b('#optDup','dup'); b('#optPhoto','photo'); b('#optOcr','ocr');
   $('#optMode').value = opt.mode; $('#optMode').onchange = e => { opt.mode = e.target.value; saveOpt(); setModeUI(); };
   $('#optCat').value = opt.cat; $('#optCat').onchange = e => { opt.cat = e.target.value; saveOpt(); };
   $('#optTheme').value = opt.theme; $('#optTheme').onchange = e => { opt.theme = e.target.value; saveOpt(); applyTheme(); };
