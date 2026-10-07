@@ -308,7 +308,7 @@ nav .fab.on{color:var(--txt)}
   <label class="l">Nom / description</label><input class="f" id="fLabel" placeholder="Ex : Pneus Michelin, retour colis…">
   <div class="grid2">
     <div><label class="l">Magasin</label><input class="f" id="fStore" list="storesDL" placeholder="Ex : Feu Vert Nîmes"></div>
-    <div><label class="l">Montant (€)</label><input class="f" id="fAmt" inputmode="decimal" placeholder="0,00"></div>
+    <div><label class="l">Net à payer (€)</label><input class="f" id="fAmt" inputmode="decimal" placeholder="0,00"></div>
     <div><label class="l">Catégorie</label><select class="f" id="fCat"></select></div>
     <div><label class="l">Date du ticket</label><input class="f" id="fDate" type="date"></div>
   </div>
@@ -743,8 +743,19 @@ const BRANDS = ['Feu Vert','Norauto','Speedy','Midas','Point S','Euromaster','Ca
 function parseReceipt(raw){
   const lines = raw.split('\n').map(l => l.replace(/\s+/g,' ').trim()).filter(l => l.length > 1);
   const low = raw.toLowerCase(), info = {};
-  const amt = s => { const m = [...s.matchAll(/(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g)].map(x => parseFloat(x[1] + '.' + x[2])); return m; };
-  // Montant total
+  const amt = s => { s = s.replace(/(\d)[oO]/g,'$10').replace(/[oO](\d)/g,'0$1').replace(/(\d)\s?[.,]\s?(\d)\s(\d)(?!\d)/g,'$1,$2$3'); const m = [...s.matchAll(/(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g)].map(x => parseFloat(x[1] + '.' + x[2])); return m; };
+  // 1) NET À PAYER en priorité absolue (tolère les erreurs de lecture : NETAPAYER, NET A PAVER, NET 4 PAYER…)
+  const squash = s => s.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9]/g,'');
+  const isNet = l => { const q = squash(l); return /NET.?[A4]?.?P[A4]Y?[EVF]?[RPKB]?/.test(q) && /NET/.test(q) && /PA/.test(q) || /NETAPA|NETPAY|NETTOAPAYER/.test(q); };
+  for (let k = 0; k < lines.length && !info.amount; k++) {
+    if (!isNet(lines[k])) continue;
+    let a = amt(lines[k]);
+    if (!a.length && lines[k+1]) a = amt(lines[k+1]);
+    if (!a.length && lines[k-1]) a = amt(lines[k-1]);
+    if (a.length) { const v = a[a.length-1]; if (v > 0 && v < 100000) info.amount = +v.toFixed(2); }
+  }
+  if (info.amount === undefined) delete info.amount;
+  // 2) sinon : total TTC, à payer, total…
   const keys = [[/net\s*[aà]\s*payer/i,10],[/total\s*ttc/i,9],[/montant\s*ttc/i,9],[/[aà]\s*payer/i,8],[/total\s*(eur|€)/i,8],[/^\s*total(?!.*(ht|tva|remise|articles?|qt))/i,7],[/montant/i,5],[/\b(cb|carte|visa|mastercard|esp[eè]ces|ch[eè]que)\b/i,4],[/total/i,3]];
   let best = null;
   lines.forEach((l, k) => {
@@ -756,7 +767,7 @@ function parseReceipt(raw){
     }
   });
   if (!best) { const all = lines.flatMap(amt).filter(v => v > 0 && v < 20000); if (all.length) best = { v: Math.max(...all) }; }
-  if (best) info.amount = +best.v.toFixed(2);
+  if (best && info.amount === undefined) info.amount = +best.v.toFixed(2);
   // Date
   const dm = raw.match(/\b(\d{1,2})\s?[\/.\-]\s?(\d{1,2})\s?[\/.\-]\s?(20\d{2}|\d{2})\b/);
   if (dm) {
@@ -1005,6 +1016,8 @@ function toast(msg, btn, fn){
 
 /* ---------------- Init ---------------- */
 document.addEventListener('visibilitychange', () => { if (document.hidden && running) stopCam(); });
+// Recalcule le net à payer des tickets déjà lus avec la nouvelle règle
+items.forEach(it => { if (it.ocr && (!it.amount || (it.auto||[]).includes('amount'))) { const a = parseReceipt(it.ocr).amount; if (a) { it.amount = a; it.auto = [...new Set([...(it.auto||[]), 'amount'])]; } } });
 applyTheme(); bindSettings(); setModeUI(); save();
 if (items[0]) renderLast(items[0]);
 refreshAll();
