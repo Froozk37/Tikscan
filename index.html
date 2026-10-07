@@ -331,7 +331,7 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CATS = ['Caisse','Retour','Garantie','Ticket resto','Carte cadeau','Jeu / Loto','Colis','Autre'];
 const CAT_IC = {'Caisse':'🧾','Retour':'↩️','Garantie':'🛡️','Ticket resto':'🍽️','Carte cadeau':'🎁','Jeu / Loto':'🎰','Colis':'📦','Autre':'📄'};
-const FMT_NAME = f => ({EAN_13:'EAN-13',EAN_8:'EAN-8',UPC_A:'UPC-A',UPC_E:'UPC-E',CODE_128:'Code 128',CODE_39:'Code 39',CODE_93:'Code 93',CODABAR:'Codabar',ITF:'ITF',QR_CODE:'QR',DATA_MATRIX:'DataMatrix',PDF417:'PDF417',PDF_417:'PDF417',AZTEC:'Aztec',MANUEL:'Manuel'}[f] || f);
+const FMT_NAME = f => ({EAN_13:'EAN-13',EAN_8:'EAN-8',UPC_A:'UPC-A',UPC_E:'UPC-E',CODE_128:'Code 128',CODE_39:'Code 39',CODE_93:'Code 93',CODABAR:'Codabar',ITF:'ITF',QR_CODE:'QR',DATA_MATRIX:'DataMatrix',PDF417:'PDF417',PDF_417:'PDF417',AZTEC:'Aztec',MANUEL:'Manuel',TEXTE:'Lu sur le ticket',SANS_CODE:'Sans code'}[f] || f);
 const eur = n => (Number(n)||0).toLocaleString('fr-FR',{style:'currency',currency:'EUR'});
 
 /* ---------------- Stockage ---------------- */
@@ -395,6 +395,36 @@ function zxDecode(c){
   return null;
 }
 const nat = r => r.map(x => ({ text:x.rawValue, format:x.format.toUpperCase() }));
+function* bands(img){
+  // Découpe l'image en bandes qui se chevauchent, en haute résolution : un petit code-barre en bas du ticket devient lisible
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  for (const n of [4, 6, 3]) {
+    const bh = H / n * 1.6;
+    for (let k = 0; k < n; k++) {
+      const y = Math.max(0, Math.min(H - bh, H / n * k - bh * .2));
+      for (const boost of [false, true]) {
+        const s = Math.min(1, 2000 / W), c = document.createElement('canvas');
+        c.width = Math.round(W*s); c.height = Math.round(bh*s);
+        const g = c.getContext('2d', { willReadFrequently:true });
+        if (boost) g.filter = 'grayscale(1) contrast(2) brightness(1.15)';
+        g.drawImage(img, 0, y, W, bh, 0, 0, c.width, c.height);
+        yield c;
+      }
+    }
+  }
+  // bande centrale verticale (ticket au milieu de la photo)
+  for (const n of [4, 6]) {
+    const cw = W * .6, cx = W * .2, bh = H / n * 1.6;
+    for (let k = 0; k < n; k++) {
+      const y = Math.max(0, Math.min(H - bh, H / n * k - bh * .2));
+      const s = Math.min(1, 1600 / cw), c = document.createElement('canvas');
+      c.width = Math.round(cw*s); c.height = Math.round(bh*s);
+      const g = c.getContext('2d', { willReadFrequently:true }); g.filter = 'grayscale(1) contrast(1.8)';
+      g.drawImage(img, cx, y, cw, bh, 0, 0, c.width, c.height);
+      yield c;
+    }
+  }
+}
 function variants(img){
   const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height, out = [];
   for (const m of [1600, 1000, 2400]) {
@@ -417,6 +447,11 @@ async function decodeImage(img){
     if (native) { try { const r = await native.detect(c); if (r.length) return nat(r); } catch(e){} }
     const r = zxDecode(c); if (r) return [r];
     await new Promise(r => setTimeout(r)); // laisse respirer l'interface
+  }
+  for (const c of bands(img)) {
+    if (native) { try { const r = await native.detect(c); if (r.length) return nat(r); } catch(e){} }
+    const r = zxDecode(c); if (r) return [r];
+    await new Promise(r => setTimeout(r));
   }
   return [];
 }
@@ -550,10 +585,17 @@ async function handleFiles(files){
   const box = $('#thumbs'); let found = 0;
   for (const f of files) {
     const url = URL.createObjectURL(f), d = document.createElement('div');
-    d.innerHTML = `<img src="${url}"><span>Analyse…</span>`; box.prepend(d);
+    d.innerHTML = `<img src="${url}"><span>Recherche du code…</span>`; box.prepend(d);
     const img = d.querySelector('img'); await img.decode().catch(()=>{});
     const res = await decodeImage(img);
-    if (!res.length) { d.querySelector('span').textContent = '❌ Aucun code'; continue; }
+    if (!res.length) {
+      const sp = d.querySelector('span');
+      if (!opt.ocr) { sp.textContent = '❌ Aucun code'; continue; }
+      sp.textContent = '📝 Lecture du texte…';
+      ocrQ.push({ create:true, canvas: snap(img, img.naturalWidth, img.naturalHeight, 2400), thumb: makeThumb(img, img.naturalWidth, img.naturalHeight), label: sp });
+      runOCR(); found++;
+      continue;
+    }
     const th = makeThumb(img, img.naturalWidth, img.naturalHeight);
     res.forEach((r,k) => { if (addItem(r.text, r.format, 'image', th, opt.ocr && k===0 ? snap(img, img.naturalWidth, img.naturalHeight) : null)) found++; });
     d.querySelector('span').textContent = '✅ ' + res[0].text;
@@ -642,8 +684,8 @@ $('#selDel').onclick = () => {
 $('#selShare').onclick = () => shareText(items.filter(i => sel.has(i.id)));
 
 /* ---------------- Remplissage auto (OCR) ---------------- */
-function snap(src, w, h){
-  const c = document.createElement('canvas'), s = Math.min(1, 1800 / Math.max(w,h));
+function snap(src, w, h, max = 1800){
+  const c = document.createElement('canvas'), s = Math.min(1, max / Math.max(w,h));
   c.width = Math.round(w*s); c.height = Math.round(h*s);
   const g = c.getContext('2d'); g.filter = 'grayscale(1) contrast(1.5)'; g.drawImage(src, 0, 0, c.width, c.height);
   return c;
@@ -669,15 +711,22 @@ function ocrUI(){
   const on = cur && ocrCur === cur.id;
   $('#ocrBox').classList.toggle('hide', !on);
 }
-function ocrProgress(p){ if (cur && ocrCur === cur.id) { $('#ocrBar').style.width = Math.round(p*100) + '%'; $('#ocrTxt').textContent = `Lecture du ticket… ${Math.round(p*100)}%`; } }
+let ocrProgress = function(p){ if (cur && ocrCur === cur.id) { $('#ocrBar').style.width = Math.round(p*100) + '%'; $('#ocrTxt').textContent = `Lecture du ticket… ${Math.round(p*100)}%`; } };
 async function runOCR(){
   if (ocrBusy || !ocrQ.length) return;
   ocrBusy = true;
   const job = ocrQ.shift(); ocrCur = job.id; ocrUI(); ocrProgress(0);
+  const lp = job.label; if (lp) { const o = ocrProgress; ocrProgress = p => { o(p); lp.textContent = `📝 Lecture ${Math.round(p*100)}%`; }; job.restore = o; }
   try {
     const w = await loadTess();
     const { data } = await w.recognize(job.canvas);
     const info = parseReceipt(data.text || '');
+    if (job.create) {
+      const code = info.code || ('TICKET-' + Date.now().toString(36).toUpperCase());
+      const made = addItem(code, info.code ? 'TEXTE' : 'SANS_CODE', 'image', job.thumb);
+      if (job.label) job.label.textContent = made ? '✅ ' + (info.amount ? eur(info.amount) : code) : '⚠️ Déjà enregistré';
+      job.id = made?.id;
+    }
     const it = items.find(i => i.id === job.id);
     if (it) {
       const filled = applyInfo(it, info);
@@ -686,7 +735,8 @@ async function runOCR(){
       if (cur && cur.id === it.id) openSheet(it.id);
       toast(filled.length ? `✨ Rempli : ${filled.join(', ')}` : 'Ticket lu, mais rien trouvé à remplir', filled.length ? 'Voir' : '', () => openSheet(it.id));
     }
-  } catch(e) { toast('Lecture du ticket impossible (connexion ?)'); }
+  } catch(e) { if (job.label) job.label.textContent = '❌ Lecture impossible'; toast('Lecture du ticket impossible (connexion ?)'); }
+  if (job.restore) ocrProgress = job.restore;
   ocrCur = null; ocrBusy = false; ocrUI(); runOCR();
 }
 const BRANDS = ['Feu Vert','Norauto','Speedy','Midas','Point S','Euromaster','Carrefour Market','Carrefour Contact','Carrefour City','Carrefour','E.Leclerc','Leclerc','Auchan','Intermarché','Intermarche','Lidl','Aldi','Casino','Géant Casino','Monoprix','Franprix','Super U','Hyper U','U Express','Netto','Leader Price','Grand Frais','Picard','Biocoop','Action','Gifi','Noz','Decathlon','Intersport','Go Sport','Fnac','Darty','Boulanger','Leroy Merlin','Castorama','Brico Dépôt','Bricomarché','Mr Bricolage','Ikea','But','Conforama','Maisons du Monde','Kiabi','Primark','Zara','H&M','Jules','Celio','Sephora','Nocibé','Marionnaud','Pharmacie','McDonald','Burger King','KFC','Quick','Subway','Starbucks','Paul','Boulangerie','Total','TotalEnergies','Esso','Shell','BP','Avia','La Poste','Relay','Tabac','Cultura','Micromania','Jardiland','Truffaut','Botanic','Lapeyre','Orchestra','JouéClub','King Jouet','Optic 2000','Afflelou','Krys'];
@@ -738,9 +788,13 @@ function parseReceipt(raw){
   const tn = raw.match(/(?:ticket|tkt|transaction|facture)\s*(?:n[°o.]*|#|:)\s*([A-Z0-9\-\/]{3,})/i);
   if (tn) notes.push('N° : ' + tn[1]);
   if (hm) notes.push('Heure : ' + hm[1].padStart(2,'0') + 'h' + hm[2]);
-  const na = raw.match(/(\d{1,3})\s*articles?/i);
+  const na = raw.match(/(\d{1,3})\s*articles?/i) || raw.match(/articles?\D{0,6}(\d{1,3})\b/i);
   if (na) notes.push(na[1] + ' article(s)');
   if (notes.length) info.notes = notes.join(' · ');
+  // Numéro imprimé sous le code-barre (longue suite de chiffres), sinon n° de ticket
+  const runs = [...raw.matchAll(/(?:\d[ ]?){10,30}/g)].map(m => m[0].replace(/ /g,'')).filter(x => x.length >= 10 && !/^0[1-9]\d{8}$/.test(x));
+  if (runs.length) info.code = runs.sort((a,b) => b.length - a.length)[0];
+  else if (tn) info.code = tn[1];
   info.raw = raw.slice(0, 3000);
   return info;
 }
