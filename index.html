@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="TikScan">
+<meta name="application-name" content="TikScan">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/favicon.png">
+<title>TikScan</title>
+<script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--txt:#eef0f4;--mut:#8b93a3;--acc:#ffcc00;--ok:#2ecc71;--err:#ff5d5d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 16px 40px}
+header{display:flex;align-items:center;justify-content:space-between;padding:18px 0 14px}
+h1{font-size:20px;letter-spacing:.5px}h1 span{color:var(--acc)}
+.tabs{display:flex;gap:8px;margin-bottom:14px}
+.tab{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--txt);font-weight:600;font-size:15px}
+.tab.on{background:var(--acc);color:#111;border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:14px}
+#view{position:relative;width:100%;aspect-ratio:3/4;max-height:60vh;background:#000;border-radius:12px;overflow:hidden}
+video{width:100%;height:100%;object-fit:cover}
+.frame{position:absolute;left:8%;right:8%;top:35%;height:30%;border:3px solid var(--acc);border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.45)}
+.laser{position:absolute;left:4%;right:4%;top:50%;height:2px;background:var(--err);animation:l 1.6s ease-in-out infinite}
+@keyframes l{0%,100%{top:15%}50%{top:85%}}
+.row{display:flex;gap:8px;margin-top:10px}
+button.b{flex:1;padding:12px;border-radius:12px;border:0;font-weight:600;font-size:15px;background:#262b36;color:var(--txt)}
+button.p{background:var(--acc);color:#111}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:28px 12px;text-align:center;color:var(--mut)}
+.drop img{max-width:100%;max-height:260px;border-radius:8px;margin-top:10px;display:block;margin-inline:auto}
+#status{min-height:22px;margin-top:10px;color:var(--mut);font-size:14px}
+#status.ok{color:var(--ok)}#status.err{color:var(--err)}
+.manual{display:flex;gap:8px}
+.manual input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:#11141a;color:var(--txt);font-size:16px}
+.hist-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.hist-h h2{font-size:16px}
+.item{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.item:first-of-type{border-top:0}
+.code{font:600 17px/1.2 ui-monospace,Menlo,monospace;word-break:break-all;letter-spacing:.5px}
+.meta{color:var(--mut);font-size:12px;margin-top:2px}
+.item .grow{flex:1;min-width:0}
+.ib{background:#262b36;border:0;color:var(--txt);border-radius:10px;padding:8px 10px;font-size:13px}
+.empty{color:var(--mut);text-align:center;padding:14px}
+.flash{animation:f .5s}@keyframes f{0%{background:rgba(46,204,113,.35)}100%{background:transparent}}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><h1 style="display:flex;align-items:center;gap:10px"><img src="/icon-192.png" alt="" width="34" height="34" style="border-radius:8px">Tik<span>Scan</span></h1><small id="eng" style="color:var(--mut)"></small></header>
+
+<div class="tabs">
+  <button class="tab on" data-t="cam">📷 Scanner</button>
+  <button class="tab" data-t="img">🖼️ Importer</button>
+</div>
+
+<section id="cam" class="card">
+  <div id="view"><video id="video" playsinline muted></video><div class="frame"><div class="laser"></div></div></div>
+  <div class="row">
+    <button class="b p" id="startBtn">Démarrer</button>
+    <button class="b hide" id="torchBtn">🔦 Flash</button>
+    <button class="b hide" id="stopBtn">Arrêter</button>
+  </div>
+</section>
+
+<section id="img" class="card hide">
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" hidden>
+    <div><b>Choisir une photo du ticket</b><br><small>ou glisser-déposer ici</small></div>
+    <img id="preview" class="hide" alt="">
+  </label>
+</section>
+
+<div id="status"></div>
+
+<div class="card">
+  <div class="manual">
+    <input id="manual" inputmode="numeric" placeholder="Saisie manuelle du numéro">
+    <button class="b p" id="addBtn" style="flex:0 0 auto">Ajouter</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="hist-h"><h2>Tickets scannés (<span id="count">0</span>)</h2>
+    <div style="display:flex;gap:6px"><button class="ib" id="csvBtn">CSV</button><button class="ib" id="clearBtn">Vider</button></div>
+  </div>
+  <div id="list"></div>
+</div>
+
+<canvas id="cv" hidden></canvas>
+
+<script>
+const $ = s => document.querySelector(s);
+const statusEl = $('#status');
+const setStatus = (m, c='') => { statusEl.textContent = m; statusEl.className = c; };
+
+/* ---------- Moteurs de décodage ---------- */
+const FORMATS_NATIVE = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','code_93','codabar','itf','qr_code','data_matrix','pdf417','aztec'];
+let native = null;
+async function initNative(){
+  if (!('BarcodeDetector' in window)) return;
+  try {
+    const sup = await BarcodeDetector.getSupportedFormats();
+    const f = FORMATS_NATIVE.filter(x => sup.includes(x));
+    if (f.length) native = new BarcodeDetector({ formats: f });
+  } catch(e){}
+}
+
+const Z = window.ZXing;
+const zx = new Z.MultiFormatReader();
+const hints = new Map();
+const BF = Z.BarcodeFormat;
+hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [BF.EAN_13,BF.EAN_8,BF.UPC_A,BF.UPC_E,BF.CODE_128,BF.CODE_39,BF.CODE_93,BF.CODABAR,BF.ITF,BF.QR_CODE,BF.DATA_MATRIX,BF.PDF_417,BF.AZTEC]);
+hints.set(Z.DecodeHintType.TRY_HARDER, true);
+zx.setHints(hints);
+
+function zxDecodeCanvas(c){
+  try{
+    const src = new Z.HTMLCanvasElementLuminanceSource(c);
+    for (const Bin of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+      try { const r = zx.decode(new Z.BinaryBitmap(new Bin(src))); return { text: r.getText(), format: BF[r.getBarcodeFormat()] }; } catch(e){}
+    }
+  }catch(e){}
+  return null;
+}
+
+/* Prépare des variantes d'image : taille, contraste, rotations */
+function variants(img){
+  const W = img.naturalWidth || img.videoWidth || img.width, H = img.naturalHeight || img.videoHeight || img.height;
+  const out = [];
+  for (const maxSide of [1600, 1000, 2400]) {
+    const s = Math.min(1, maxSide / Math.max(W,H));
+    for (const rot of [0, 90]) {
+      for (const boost of [false, true]) {
+        const c = document.createElement('canvas');
+        const w = Math.round(W*s), h = Math.round(H*s);
+        c.width = rot ? h : w; c.height = rot ? w : h;
+        const g = c.getContext('2d', { willReadFrequently:true });
+        if (boost) g.filter = 'grayscale(1) contrast(1.8) brightness(1.1)';
+        if (rot){ g.translate(c.width/2, c.height/2); g.rotate(Math.PI/2); g.drawImage(img, -w/2, -h/2, w, h); }
+        else g.drawImage(img, 0, 0, w, h);
+        out.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+async function decodeImage(img){
+  if (native) {
+    try { const r = await native.detect(img); if (r.length) return r.map(x => ({ text:x.rawValue, format:x.format.toUpperCase() })); } catch(e){}
+  }
+  for (const c of variants(img)) {
+    if (native) { try { const r = await native.detect(c); if (r.length) return r.map(x => ({ text:x.rawValue, format:x.format.toUpperCase() })); } catch(e){} }
+    const r = zxDecodeCanvas(c);
+    if (r) return [r];
+  }
+  return [];
+}
+
+/* ---------- Historique ---------- */
+let items = [];
+try { items = JSON.parse(localStorage.getItem('tickets') || '[]'); } catch(e){}
+const save = () => { try { localStorage.setItem('tickets', JSON.stringify(items)); } catch(e){} };
+
+function add(text, format, source){
+  text = String(text).trim();
+  if (!text) return;
+  const ex = items.find(i => i.text === text);
+  if (ex) { setStatus(`Déjà enregistré : ${text}`, 'err'); render(text); return; }
+  items.unshift({ text, format: format||'MANUEL', source, date: new Date().toISOString() });
+  save(); render(text);
+  setStatus(`✅ ${text} (${format||'manuel'})`, 'ok');
+  if (navigator.vibrate) navigator.vibrate(120);
+  beep();
+}
+function render(hl){
+  $('#count').textContent = items.length;
+  const L = $('#list');
+  if (!items.length){ L.innerHTML = '<div class="empty">Aucun ticket pour l’instant</div>'; return; }
+  L.innerHTML = items.map((i,k) => `
+    <div class="item ${i.text===hl?'flash':''}">
+      <div class="grow"><div class="code">${i.text.replace(/[<>&]/g,'')}</div>
+      <div class="meta">${i.format} · ${i.source} · ${new Date(i.date).toLocaleString('fr-FR')}</div></div>
+      <button class="ib" data-c="${k}">Copier</button><button class="ib" data-d="${k}">✕</button>
+    </div>`).join('');
+}
+$('#list').onclick = e => {
+  const c = e.target.dataset.c, d = e.target.dataset.d;
+  if (c !== undefined) { navigator.clipboard?.writeText(items[c].text); setStatus('Copié', 'ok'); }
+  if (d !== undefined) { items.splice(d,1); save(); render(); }
+};
+$('#clearBtn').onclick = () => { if (confirm('Supprimer tous les tickets ?')) { items = []; save(); render(); } };
+$('#csvBtn').onclick = () => {
+  const csv = 'Numero;Format;Source;Date\n' + items.map(i => `"${i.text}";${i.format};${i.source};${new Date(i.date).toLocaleString('fr-FR')}`).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿'+csv], {type:'text/csv'}));
+  a.download = 'tickets.csv'; a.click();
+};
+$('#addBtn').onclick = () => { add($('#manual').value, 'MANUEL', 'saisie'); $('#manual').value=''; };
+$('#manual').onkeydown = e => { if (e.key==='Enter') $('#addBtn').click(); };
+
+let actx;
+function beep(){ try{ actx = actx || new AudioContext(); const o=actx.createOscillator(), g=actx.createGain(); o.frequency.value=1200; g.gain.value=.08; o.connect(g).connect(actx.destination); o.start(); o.stop(actx.currentTime+.09);}catch(e){} }
+
+/* ---------- Caméra ---------- */
+const video = $('#video'), cv = $('#cv');
+let stream = null, running = false, last = '', lastT = 0, busy = false;
+
+async function start(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}, focusMode:'continuous' }, audio:false });
+    video.srcObject = stream; await video.play();
+    running = true; setStatus('Vise le code-barre du ticket dans le cadre…');
+    $('#startBtn').classList.add('hide'); $('#stopBtn').classList.remove('hide');
+    const track = stream.getVideoTracks()[0];
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.torch) $('#torchBtn').classList.remove('hide');
+    if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced:[{focusMode:'continuous'}] }).catch(()=>{});
+    loop();
+  }catch(e){ setStatus('Caméra inaccessible : autorise l’accès ou utilise « Importer ».', 'err'); }
+}
+function stop(){
+  running = false; stream?.getTracks().forEach(t=>t.stop()); stream = null;
+  $('#startBtn').classList.remove('hide'); $('#stopBtn').classList.add('hide'); $('#torchBtn').classList.add('hide');
+}
+let torch = false;
+$('#torchBtn').onclick = () => { torch = !torch; stream?.getVideoTracks()[0].applyConstraints({ advanced:[{torch}] }).catch(()=>{}); };
+$('#startBtn').onclick = start; $('#stopBtn').onclick = stop;
+
+let flip = 0;
+async function tick(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+  let res = null;
+  if (native) {
+    try { const r = await native.detect(video); if (r.length) res = { text:r[0].rawValue, format:r[0].format.toUpperCase() }; } catch(e){}
+  }
+  if (!res) {
+    // Zone centrale (là où est le cadre), alternée avec l'image entière et une version tournée
+    flip = (flip+1) % 3;
+    const g = cv.getContext('2d', { willReadFrequently:true });
+    if (flip === 0) { cv.width = vw; cv.height = vh; g.drawImage(video,0,0); }
+    else {
+      const sw = vw*0.9, sh = vh*0.45, sx = (vw-sw)/2, sy = (vh-sh)/2;
+      const s = Math.min(1, 1400/sw);
+      if (flip === 1) { cv.width = sw*s; cv.height = sh*s; g.drawImage(video,sx,sy,sw,sh,0,0,cv.width,cv.height); }
+      else { cv.width = vh*s; cv.height = vw*s; g.save(); g.translate(cv.width/2,cv.height/2); g.rotate(Math.PI/2); g.drawImage(video,-vw*s/2,-vh*s/2,vw*s,vh*s); g.restore(); }
+    }
+    res = zxDecodeCanvas(cv);
+  }
+  if (res) {
+    const now = Date.now();
+    if (res.text !== last || now - lastT > 3000) { last = res.text; lastT = now; add(res.text, res.format, 'scan'); }
+  }
+}
+async function loop(){
+  if (!running) return;
+  if (!busy) { busy = true; try { await tick(); } catch(e){} busy = false; }
+  setTimeout(loop, 120);
+}
+
+/* ---------- Import d'image ---------- */
+async function handleFile(f){
+  if (!f || !f.type.startsWith('image/')) return;
+  setStatus('Analyse de l’image…');
+  const url = URL.createObjectURL(f);
+  const img = $('#preview'); img.src = url; img.classList.remove('hide');
+  await img.decode().catch(()=>{});
+  const res = await decodeImage(img);
+  if (!res.length) { setStatus('Aucun code-barre détecté. Essaie une photo plus nette, bien à plat et éclairée.', 'err'); return; }
+  res.forEach(r => add(r.text, r.format, 'image'));
+}
+$('#file').onchange = e => { handleFile(e.target.files[0]); e.target.value = ''; };
+const drop = $('#drop');
+drop.ondragover = e => e.preventDefault();
+drop.ondrop = e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); };
+document.addEventListener('paste', e => { const f = [...(e.clipboardData?.files||[])][0]; if (f) { switchTab('img'); handleFile(f); } });
+
+/* ---------- Onglets ---------- */
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t===t));
+  $('#cam').classList.toggle('hide', t!=='cam'); $('#img').classList.toggle('hide', t!=='img');
+  if (t!=='cam') stop();
+  setStatus('');
+}
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => switchTab(b.dataset.t));
+
+initNative().then(() => { $('#eng').textContent = native ? 'moteur natif + ZXing' : 'moteur ZXing'; });
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+</script>
+</body>
+</html>
